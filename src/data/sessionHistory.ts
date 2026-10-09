@@ -36,6 +36,7 @@ import {
   parseOpenCodeSessionActivities,
   sessionIdFromPath,
 } from "./providers/opencode.js";
+import { getPiSessionsDir, piProvider } from "./providers/pi.js";
 import type { SessionProvider } from "./providers/types.js";
 
 const norm = (p: string) => p.replace(/\\/g, "/");
@@ -69,6 +70,12 @@ function providerForPath(filePath: string): SessionProvider {
     p.includes("/.codex/sessions/")
   ) {
     return codexProvider;
+  }
+  if (
+    p.startsWith(`${norm(getPiSessionsDir())}/`) ||
+    p.includes("/.pi/agent/sessions/")
+  ) {
+    return piProvider;
   }
   return claudeProvider;
 }

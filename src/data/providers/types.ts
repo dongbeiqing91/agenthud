@@ -33,7 +33,8 @@ export type ProviderName =
   | "kiro"
   | "kiro-ide"
   | "codex"
-  | "opencode";
+  | "opencode"
+  | "pi";
 
 export interface DiscoverOptions {
   // When set, drop every project whose decoded path is not exactly this

@@ -35,12 +35,13 @@ export interface SessionNode {
   firstUserPrompt: string | null; // Display description: latest substantial (≥10 chars, non-slash) user message, falling back to the first natural-language one. Name kept for backwards compat.
   liveState: LiveState | null; // working/waiting from JSONL tail; null = fall back to time-based status
   hidden?: boolean; // true when matched by hiddenSessions/hiddenSubAgents, or descendant of a hidden project
-  provider?: "claude" | "kiro" | "kiro-ide" | "codex" | "opencode"; // origin source of this node. Renderer uses it for a small per-row label so users can tell at a glance which CLI created the session.
+  provider?: "claude" | "kiro" | "kiro-ide" | "codex" | "opencode" | "pi"; // origin source of this node. Renderer uses it for a small per-row label so users can tell at a glance which CLI created the session.
   /**
    * Origin CLI/schema version of this session, captured per provider:
    * claude per-line `version` (`2.1.148`), codex `session_meta.cli_version`
    * (`0.139.0`), kiro envelope `version` (`v1`), opencode latest `migration`
-   * id, kiro-ide best-effort. An OPAQUE, provider-defined string — do not
+   * id, kiro-ide best-effort, pi session header `version` (`3`). An OPAQUE,
+   * provider-defined string — do not
    * assume semver in shared code (see src/data/version.ts). Undefined when
    * the source is absent. The seam for version-gated parsing of format drift.
    */

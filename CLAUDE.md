@@ -80,6 +80,8 @@ agenthud/
 |------|--------|--------|
 | Sessions | `~/.claude/projects/` | JSONL file scan |
 | Sub-agents | `~/.claude/projects/{id}/subagents/` | Directory structure |
+| pi sessions | `~/.pi/agent/sessions/` | JSONL branched-tree scan (`providers/pi.ts`) |
+| pi context windows | `~/.pi/agent/models.json` | Model registry lookup |
 | Config | `~/.agenthud/config.yaml` | YAML parse |
 | Logs | `~/.agenthud/logs/` | File write on `s` key |
 

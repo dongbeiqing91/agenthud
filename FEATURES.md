@@ -344,7 +344,7 @@ additive-only:
 interface FollowEvent {
   ts: number;                 // epoch ms (activity ts; detection time for state/lifecycle)
   type: "activity" | "state" | "lifecycle";
-  provider: string;           // "claude" | "codex" | "kiro" | "kiro-ide" | "opencode"
+  provider: string;           // "claude" | "codex" | "kiro" | "kiro-ide" | "opencode" | "pi"
   project: string;            // project name (basename of cwd)
   projectPath: string;        // absolute cwd
   session: string;            // owning top-level session's full id
@@ -514,6 +514,7 @@ the `?` overlay renders in-app.
 | `~/.agenthud/summaries/index.md` | Auto-generated navigable index |
 | `~/.claude/projects/` | Claude Code session JSONL files (read-only) |
 | `~/.codex/sessions/` | Codex CLI rollout JSONL files (read-only) |
+| `~/.pi/agent/sessions/` | pi session JSONL files, branched trees (read-only); `~/.pi/agent/models.json` for context windows |
 | `…/Kiro/User/globalStorage/kiro.kiroagent/` | Kiro IDE session + execution files (read-only) |
 | `~/.kiro/sessions/cli/` | Kiro CLI session files (read-only) |
 
@@ -528,6 +529,8 @@ documented under [`docs/schemas/`](./docs/schemas/).
 | `CODEX_SESSIONS_DIR` | Override the Codex sessions directory (default: `~/.codex/sessions`). |
 | `KIRO_SESSIONS_DIR` | Override the Kiro CLI sessions directory (default: `~/.kiro/sessions/cli`). |
 | `KIRO_IDE_SESSIONS_DIR` | Override the Kiro IDE `workspace-sessions` directory. |
+| `PI_SESSIONS_DIR` | Override the pi sessions directory (default: `~/.pi/agent/sessions`). |
+| `PI_MODELS_FILE` | Override the pi model registry (default: the `models.json` next to the sessions root). |
 | `AGENTHUD_HOME` | Override the app data directory (default: `~/.agenthud`). |
 | `WSL_DISTRO_NAME`, `/proc/version` markers | WSL detection (cached for the process; v0.12.4). Affects `--open` opener preference (`wslview` over `xdg-open`) and the cwd-home protection in legacy-config migration. |
 | `NODE_ENV` | Set to `production` by default in the bundled binary to disable React dev-mode profiler accumulation (~12× memory-leak reduction; v0.9.0). |

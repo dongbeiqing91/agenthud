@@ -15,10 +15,25 @@ describe("discoverSessions on an oversized session file", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "agenthud-big-"));
     process.env.CLAUDE_PROJECTS_DIR = dir;
+    // Isolate from every other provider's REAL root: this test asserts on
+    // the merged tree assuming only Claude is enabled. Dev machines may
+    // have live ~/.pi / ~/.codex / kiro sessions that would otherwise
+    // merge in and reorder projects (a live pi session written by the
+    // test run itself is what made this flaky).
+    process.env.PI_SESSIONS_DIR = join(dir, "no-pi");
+    process.env.CODEX_SESSIONS_DIR = join(dir, "no-codex");
+    process.env.KIRO_SESSIONS_DIR = join(dir, "no-kiro");
+    process.env.KIRO_IDE_SESSIONS_DIR = join(dir, "no-kiro-ide");
+    process.env.OPENCODE_DB = join(dir, "no-opencode.db");
     clearClaudeFileCaches();
   });
   afterEach(() => {
     delete process.env.CLAUDE_PROJECTS_DIR;
+    delete process.env.PI_SESSIONS_DIR;
+    delete process.env.CODEX_SESSIONS_DIR;
+    delete process.env.KIRO_SESSIONS_DIR;
+    delete process.env.KIRO_IDE_SESSIONS_DIR;
+    delete process.env.OPENCODE_DB;
     clearClaudeFileCaches();
     rmSync(dir, { recursive: true, force: true });
   });
