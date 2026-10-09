@@ -80,6 +80,26 @@ describe("summarizeToolDetail", () => {
     ).toBe("a.ts L1-3 +3");
   });
 
+  it("Write: non-string content (object) degrades to basename instead of crashing", () => {
+    // A malformed row where Write's content was serialized as a JSON object
+    // (e.g. the harness stored the file's parsed content, not its text) must
+    // not throw on content.split — just show the basename.
+    const objContent = { version: "0.0.1", configurations: [{ name: "x" }] };
+    expect(
+      summarizeToolDetail(
+        "Write",
+        { file_path: "/x/.claude/launch.json", content: objContent },
+        undefined,
+      ),
+    ).toBe("launch.json");
+    // Same guard on the result.content path.
+    expect(
+      summarizeToolDetail("Write", { file_path: "/x/a.ts" }, {
+        content: objContent,
+      } as unknown as Parameters<typeof summarizeToolDetail>[2]),
+    ).toBe("a.ts");
+  });
+
   it("Write: counts lines correctly when content ends with a trailing newline", () => {
     expect(
       summarizeToolDetail(
@@ -287,6 +307,17 @@ describe("buildToolDetailBody", () => {
     ).toEqual({ text: "hello\nworld", kind: "code" });
   });
 
+  it("Write: non-string content (object) returns null (no code body)", () => {
+    const objContent = { version: "0.0.1", configurations: [] };
+    expect(
+      buildToolDetailBody(
+        "Write",
+        { file_path: "/x/launch.json", content: objContent },
+        undefined,
+      ),
+    ).toBeNull();
+  });
+
   it("Write: prefers content (code) even when a structuredPatch is also present", () => {
     const hunks = [
       {
@@ -378,6 +409,14 @@ describe("buildToolDetailBody", () => {
     ).toEqual({ text: "10: only", kind: "code", numbered: true });
   });
 
+  it("Read: non-string file content returns null (does not crash numberLines)", () => {
+    expect(
+      buildToolDetailBody("Read", { file_path: "/x/a.ts" }, {
+        file: { content: { not: "a string" }, startLine: 1, numLines: 2 },
+      } as unknown as Parameters<typeof buildToolDetailBody>[2]),
+    ).toBeNull();
+  });
+
   it("Read without file content, and TaskUpdate/Bash tools, have no body", () => {
     expect(
       buildToolDetailBody(
@@ -410,6 +449,14 @@ describe("buildToolDetailBody", () => {
   it("Task: null when result is missing", () => {
     expect(
       buildToolDetailBody("Task", { description: "x" }, undefined),
+    ).toBeNull();
+  });
+
+  it("Task: non-string result content returns null (does not leak an object)", () => {
+    expect(
+      buildToolDetailBody("Task", { description: "x" }, {
+        content: { nested: "obj" },
+      } as unknown as Parameters<typeof buildToolDetailBody>[2]),
     ).toBeNull();
   });
 
