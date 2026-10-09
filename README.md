@@ -102,6 +102,8 @@ The summary runs through an **agent CLI of your choice**. By default it auto-det
 
 Summaries are cached one-file-per-day under `~/.agenthud/summaries/`, cross-linked into a browsable index (`-I` to open it), and stamped with the engine + model that produced them — so switching engines regenerates rather than serving stale text.
 
+Heavy days are handled gracefully: if the engine rejects the payload as too long, `agenthud` rebuilds the report at a smaller `--detail-limit` and retries automatically, and engine failures print the engine's own error message instead of aborting silently.
+
 ## Scripting & integration — `agenthud report`
 
 `agenthud report` is the machine-readable layer the other two are built on. It isn't a feature you rarely touch — it's the substrate of the one you use every day:

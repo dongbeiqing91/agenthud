@@ -192,6 +192,16 @@ engine**: Claude / Codex / Kiro — see `--engine` below).
   omit it.
 - Oversize reports (~300K tokens estimated) print a warning and,
   interactively, prompt one more time before sending (v0.9.4).
+- If the engine rejects the prompt as too large (e.g. a Claude
+  gateway's "Prompt is too long"), `summary` rebuilds the report
+  with smaller `--detail-limit` steps (800 → 400 → 200 → 100
+  chars) and retries — a heavy day degrades gracefully instead of
+  aborting with no summary. Light days pay nothing: the first
+  full-detail attempt is the only attempt.
+- Engine failures surface the engine's own error message (e.g.
+  "Prompt is too long", "Invalid API key") instead of a silent
+  abort. Only prompt-size rejections trigger a retry; auth,
+  crash, and network errors fail once, with the reason shown.
 - The Claude engine runs `claude -p --no-session-persistence` so
   the summary call doesn't pollute the session tree (v0.9.2 /
   v0.9.3). Codex uses `codex exec -o <file>`; Kiro uses

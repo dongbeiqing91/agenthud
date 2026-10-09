@@ -328,6 +328,10 @@ interface SpawnEngineResult {
   code: number;
   text: string;
   usage: UsageSummary | null;
+  /** The failure reason when `code !== 0` (the engine's own error
+   *  message if it reported one, else its first stderr line), or
+   *  `null` on success. */
+  error: string | null;
 }
 
 /**
@@ -375,10 +379,20 @@ function spawnEngine(opts: SpawnEngineOpts): Promise<SpawnEngineResult> {
         process.stderr.write(
           `Error: ${engine.command} not found. Install: ${engine.installHint}\n`,
         );
-        resolve({ code: 1, text: "", usage: null });
+        resolve({
+          code: 1,
+          text: "",
+          usage: null,
+          error: `${engine.command} not found`,
+        });
       } else {
         process.stderr.write(`Error: ${err.message}\n`);
-        resolve({ code: 1, text: "", usage: null });
+        resolve({
+          code: 1,
+          text: "",
+          usage: null,
+          error: err.message,
+        });
       }
     });
 
@@ -459,10 +473,24 @@ function spawnEngine(opts: SpawnEngineOpts): Promise<SpawnEngineResult> {
           );
         }
       }
+      // Surface WHY the engine failed: the parsed engine error
+      // (e.g. "Prompt is too long") first, then the first non-empty
+      // stderr line (crashes, auth), then a bare exit code.
+      const engineError = parser.error?.() ?? null;
+      const stderrLine =
+        stderrBuf
+          .split("\n")
+          .map((l) => l.trim())
+          .find((l) => l.length > 0) ?? null;
       resolve({
         code: failed ? (code ?? 1) || 1 : 0,
         text: assembledText,
         usage: parser.usage(),
+        error: failed
+          ? (engineError ??
+            (stderrLine ? stderrLine.slice(0, 200) : null) ??
+            `exited with code ${code ?? "?"} (no output)`)
+          : null,
       });
     });
 
@@ -519,6 +547,8 @@ interface DailyGenResult {
   fromCache: boolean;
   skipped: boolean;
   usage: UsageSummary | null;
+  /** Engine error when `code !== 0` (null on success / skip). */
+  error: string | null;
 }
 
 async function generateDailySummary(
@@ -551,6 +581,7 @@ async function generateDailySummary(
           fromCache: true,
           skipped: false,
           usage: null,
+          error: null,
         };
       }
       if (opts.announce) {
@@ -626,6 +657,7 @@ async function generateDailySummary(
       fromCache: false,
       skipped: true,
       usage: null,
+      error: null,
     };
   }
 
@@ -638,6 +670,7 @@ async function generateDailySummary(
         fromCache: false,
         skipped: true,
         usage: null,
+        error: null,
       };
     }
   }
@@ -661,6 +694,7 @@ async function generateDailySummary(
           fromCache: false,
           skipped: true,
           usage: null,
+          error: null,
         };
       }
     }
@@ -670,25 +704,64 @@ async function generateDailySummary(
   // user a visible heartbeat through the (typically 30–60s) latency
   // before the engine starts producing output. The ticker auto-stops
   // on the first chunk (see onFirstChunk) so it doesn't fight the
-  // streaming output for the same terminal row.
-  const stopTicker = opts.announce
-    ? startStderrTicker(`sending to ${opts.engine.name}`)
-    : null;
+  // streaming output for the same terminal row. One ticker per
+  // attempt (retries get a fresh one).
 
   const prompt = resolvePrompt("daily", opts.promptOverride);
-  const result = await spawnEngine({
-    engine: opts.engine,
-    prompt,
-    stdin: reportMarkdown,
-    cachePath: cached,
-    streamToStdout: opts.streamToStdout,
-    model: opts.model,
-    onFirstChunk: () => {
-      if (stopTicker) stopTicker();
-    },
-  });
-  // Defensive in case the spawn never produced a chunk (error path).
-  if (stopTicker) stopTicker();
+
+  // Auto-shrink retry ladder: when the engine rejects the prompt as
+  // too large ("Prompt is too long"), rebuild the report with a
+  // smaller detail-limit and try again. A light day pays nothing
+  // (the first full-detail attempt succeeds); a heavy day degrades
+  // gracefully instead of aborting with no summary at all.
+  const ladder = detailLadder(opts.detailLimit);
+  let reportToSend = reportMarkdown;
+  let result: SpawnEngineResult = {
+    code: 1,
+    text: "",
+    usage: null,
+    error: null,
+  };
+  for (let attempt = 0; attempt < ladder.length; attempt++) {
+    if (attempt > 0) {
+      const nextLimit = ladder[attempt];
+      reportToSend = generateReport(flatSessions, {
+        date: opts.date,
+        include: opts.include,
+        format: "markdown",
+        detailLimit: nextLimit,
+        withGit: opts.withGit,
+      });
+      const nextTokens = Math.ceil(
+        Buffer.byteLength(reportToSend, "utf-8") / 4,
+      );
+      if (opts.announce) {
+        process.stderr.write(
+          `agenthud: ⚠ engine: ${result.error ?? "no output"} — retrying ${dateLabel} with detail-limit ${nextLimit} (≈ ${nextTokens.toLocaleString()} tokens)\n`,
+        );
+      }
+    }
+    const stopTicker = opts.announce
+      ? startStderrTicker(`sending to ${opts.engine.name}`)
+      : null;
+    result = await spawnEngine({
+      engine: opts.engine,
+      prompt,
+      stdin: reportToSend,
+      cachePath: cached,
+      streamToStdout: opts.streamToStdout,
+      model: opts.model,
+      onFirstChunk: () => {
+        if (stopTicker) stopTicker();
+      },
+    });
+    // Defensive in case the spawn never produced a chunk (error path).
+    if (stopTicker) stopTicker();
+    if (result.code === 0) break;
+    // Only prompt-size rejections are worth a smaller payload — auth,
+    // crash, and network failures won't improve on retry.
+    if (!isPromptTooLong(result.error)) break;
+  }
 
   if (opts.announce && result.code === 0) {
     process.stderr.write("\n");
@@ -704,7 +777,37 @@ async function generateDailySummary(
     fromCache: false,
     skipped: false,
     usage: result.usage,
+    error: result.code === 0 ? null : result.error,
   };
+}
+
+/**
+ * Detail-limit ladder for auto-shrink retries: the requested limit
+ * first (0 = unlimited), then finite steps halved down to 100 chars.
+ * Only consulted when the engine rejects the prompt as too large, so
+ * a light day never pays for the truncation.
+ */
+function detailLadder(requested: number): number[] {
+  const ladder: number[] = [requested];
+  let next = requested === 0 ? 800 : Math.floor(requested / 2);
+  while (next >= 100) {
+    ladder.push(next);
+    next = Math.floor(next / 2);
+  }
+  return ladder;
+}
+
+/**
+ * True when the engine's error indicates the PROMPT was too large —
+ * the one failure class a smaller payload can fix. Deliberately
+ * narrow: auth, network, and crash errors must not trigger a
+ * pointless re-spawn.
+ */
+function isPromptTooLong(error: string | null): boolean {
+  if (!error) return false;
+  return /(too long|prompt size|token.{0,16}limit|context.{0,16}(window|length)|exceeds?[^.\n]{0,40}(context|token|input|prompt)|input[^.\n]{0,20}too large)/i.test(
+    error,
+  );
 }
 
 export async function runSummary(options: SummaryOptions): Promise<number> {
@@ -734,6 +837,15 @@ export async function runSummary(options: SummaryOptions): Promise<number> {
     detailLimit: options.detailLimit,
     withGit: options.withGit,
   });
+
+  // Surface the engine's failure reason — previously an engine
+  // rejection (e.g. "Prompt is too long") aborted with no
+  // explanation on stderr at all.
+  if (res.code !== 0 && !res.skipped) {
+    process.stderr.write(
+      `agenthud: summary failed${res.error ? `: ${res.error}` : ""}.\n`,
+    );
+  }
   // Regenerate the index when something *changed* on disk (a new
   // daily got written), OR when the user explicitly asked for the
   // navigation hub via `--open-index` (so we guarantee `index.md`
@@ -887,7 +999,7 @@ export async function runRangeSummary(
     }
     if (res.code !== 0) {
       process.stderr.write(
-        `agenthud: aborted (failed to generate daily summary for ${label}).\n`,
+        `agenthud: aborted (failed to generate daily summary for ${label})${res.error ? `: ${res.error}` : ""}.\n`,
       );
       return res.code;
     }
@@ -942,6 +1054,9 @@ export async function runRangeSummary(
   stopMetaTicker();
 
   if (metaResult.code !== 0) {
+    process.stderr.write(
+      `agenthud: range summary failed${metaResult.error ? `: ${metaResult.error}` : ""}.\n`,
+    );
     return metaResult.code;
   }
 

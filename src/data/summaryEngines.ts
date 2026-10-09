@@ -47,6 +47,12 @@ export interface EngineParser {
   /** Call after the process closes (flush any buffered line). */
   flush?(onText: (text: string) => void): void;
   usage(): UsageSummary | null;
+  /**
+   * The engine-reported error message when the run failed (e.g. a
+   * claude `result` event with `is_error: true`), or `null` on
+   * success / no error info.
+   */
+  error?(): string | null;
 }
 
 export interface SummaryEngine {
@@ -118,6 +124,7 @@ function makeJsonlParser(
 ): EngineParser {
   let lineBuf = "";
   let usage: UsageSummary | null = null;
+  let error: string | null = null;
   const handle = (line: string, onText: (t: string) => void) => {
     if (!line.trim()) return;
     let event: Record<string, unknown>;
@@ -129,6 +136,21 @@ function makeJsonlParser(
     onAssistantText(event, onText);
     const u = onResult(event);
     if (u) usage = u;
+    // A rejected run still emits a final `result` event — capture its
+    // message (e.g. "Prompt is too long") so the caller can react and
+    // report it. A successful `result` event's `result` field is the
+    // final text, not an error.
+    if (
+      error === null &&
+      typeof event === "object" &&
+      event !== null &&
+      event.type === "result" &&
+      event.is_error === true
+    ) {
+      const msg = event.result;
+      error =
+        typeof msg === "string" && msg.trim() ? msg.trim() : "engine error";
+    }
   };
   return {
     feed(chunk, onText) {
@@ -145,6 +167,7 @@ function makeJsonlParser(
       lineBuf = "";
     },
     usage: () => usage,
+    error: () => error,
   };
 }
 

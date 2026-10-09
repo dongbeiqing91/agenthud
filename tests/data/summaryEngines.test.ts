@@ -242,4 +242,62 @@ describe("engine provenance marker", () => {
       expect(cacheMatchesEngine(c, "kiro", undefined)).toBe(false);
     });
   });
+
+  describe("claude parser error capture", () => {
+    // A rejected run (e.g. a gateway "Prompt is too long") still
+    // emits a `result` event — with `is_error: true` and NO assistant
+    // text. The parser must expose that message so the runner can
+    // react (auto-shrink) and surface it instead of failing silently.
+    it("exposes the is_error result message as the engine error", () => {
+      const parser = claudeEngine.makeParser();
+      parser.feed(
+        `${JSON.stringify({
+          type: "result",
+          is_error: true,
+          result: "Prompt is too long",
+        })}\n`,
+        () => {},
+      );
+      expect(parser.error?.()).toBe("Prompt is too long");
+    });
+
+    it("does not treat a successful result's text as an error", () => {
+      const parser = claudeEngine.makeParser();
+      parser.feed(
+        `${JSON.stringify({
+          type: "result",
+          is_error: false,
+          result: "Final summary text",
+          usage: { input_tokens: 3, output_tokens: 2 },
+        })}\n`,
+        () => {},
+      );
+      expect(parser.error?.()).toBeNull();
+      expect(parser.usage()?.inputTokens).toBe(3);
+    });
+
+    it("keeps usage null for an error result without usage", () => {
+      const parser = claudeEngine.makeParser();
+      parser.feed(
+        `${JSON.stringify({
+          type: "result",
+          is_error: true,
+          result: "Prompt is too long",
+        })}\n`,
+        () => {},
+      );
+      expect(parser.usage()).toBeNull();
+      expect(parser.error?.()).toBe("Prompt is too long");
+    });
+
+    it("captures an error message from the flush path (no trailing newline)", () => {
+      const parser = claudeEngine.makeParser();
+      parser.feed(
+        JSON.stringify({ type: "result", is_error: true, result: "boom" }),
+        () => {},
+      );
+      parser.flush?.(() => {});
+      expect(parser.error?.()).toBe("boom");
+    });
+  });
 });
