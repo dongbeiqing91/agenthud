@@ -16,12 +16,17 @@
  *        blobs(id=SHA256-hex, data=BLOB) — content-addressed:
  *          - message blobs: plain JSON {role, content, id,
  *            providerOptions}
- *          - node blobs: undocumented protobuf; field 1 = repeated
- *            32-byte message refs, field 8 = next-node ref (linked
- *            list, root = latestRootBlobId, walk order is
- *            chronological), field 9 = workspace file:// URI,
- *            field 22 = source ("cli"), field 26 = ms timestamp,
- *            field 27 = timezone.
+ *          - node blobs: undocumented protobuf "state" nodes.
+ *            latestRootBlobId is the CURRENT state of the chat:
+ *            field 1 = repeated 32-byte refs to the conversation's
+ *            message blobs (in order), field 5 = context gauge
+ *            ({1: used tokens, 2: window tokens, 3: breakdown}),
+ *            field 8 = successor/diff ref (followed, but only
+ *            32-byte field-1 payloads count as messages),
+ *            field 9 = workspace file:// URI, field 22 = source
+ *            ("cli"), field 26 = ms timestamp, field 27 = timezone.
+ *            Older state snapshots of the same chat live in the
+ *            same table and are only reachable via field 8.
  *
  * Conventions followed (see docs/schemas/README.md):
  * - Sessions are grouped by the cwd from meta.json.
@@ -39,43 +44,29 @@
  * - Model name: Cursor stores no model field on messages; it is
  *   recovered from the system prompt ("powered by <Model>") when
  *   present, else null.
- * - No token usage exists anywhere in the format, so contextUsage
- *   is never set (the gauge stays hidden for Cursor sessions).
+ * - Context gauge: a state node's field 5 is a nested payload
+ *   `{1: usedTokens, 2: windowTokens, 3: breakdown}`; the provider
+ *   takes the gauge from the latest state node that carries one.
+ *   Chats without a readable gauge show no gauge (never an error).
  * - Sub-agents: not yet mapped (their on-disk shape is unverified);
  *   MVP lists top-level chats only.
  */
 
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-
 import type {
-  DiscoverOptions,
-  ParseResult,
-  SessionProvider,
-} from "./types.js";
-import {
-  canonicalToolLabel,
-  iconForCanonicalLabel,
-} from "./toolLabels.js";
-import {
-  type ActivityEntry,
-  type GlobalConfig,
-  type ProjectNode,
-  type SessionNode,
-  type SessionStatus,
-  type SessionTree,
+  ActivityEntry,
+  GlobalConfig,
+  ProjectNode,
+  SessionNode,
+  SessionStatus,
+  SessionTree,
 } from "../../types/index.js";
-import {
-  ONE_HOUR_MS,
-  THIRTY_MINUTES_MS,
-} from "../../utils/timeConstants.js";
+import { ONE_HOUR_MS, THIRTY_MINUTES_MS } from "../../utils/timeConstants.js";
+import { canonicalToolLabel, iconForCanonicalLabel } from "./toolLabels.js";
+import type { DiscoverOptions, ParseResult, SessionProvider } from "./types.js";
 
 // --- synthetic paths ---------------------------------------------------------
 // A chat has no real backing file (its messages live in store.db), so the
@@ -111,7 +102,12 @@ export function getCursorChatsDir(): string {
 // instead of failing the ESM module graph at import time.
 type SqliteDb = any;
 let sqliteMod:
-  | { DatabaseSync: new (path: string, opts?: Record<string, unknown>) => SqliteDb }
+  | {
+      DatabaseSync: new (
+        path: string,
+        opts?: Record<string, unknown>,
+      ) => SqliteDb;
+    }
   | null
   | undefined;
 
@@ -167,6 +163,9 @@ interface CursorNode {
   source: string | null; // field 22: e.g. "cli"
   ts: number | null; // field 26: epoch ms
   tz: string | null; // field 27: IANA timezone
+  // field 5: nested context gauge {1: used tokens, 2: window tokens}
+  contextUsed: number | null;
+  contextWindow: number | null;
 }
 
 /** Read a base-128 varint. Returns [value, nextPos]. Values stay < 2^53. */
@@ -190,6 +189,8 @@ function decodeNode(buf: Buffer): CursorNode {
     source: null,
     ts: null,
     tz: null,
+    contextUsed: null,
+    contextWindow: null,
   };
   let pos = 0;
   while (pos < buf.length) {
@@ -216,7 +217,35 @@ function decodeNode(buf: Buffer): CursorNode {
         pos += len;
         switch (field) {
           case 1:
-            node.refs.push(data.toString("hex"));
+            // Only 32-byte payloads are message refs; longer field-1
+            // payloads exist on diff blobs and would be junk lookups.
+            if (data.length === 32) node.refs.push(data.toString("hex"));
+            break;
+          case 5:
+            // Context gauge: nested {1: used varint, 2: window varint,
+            // 3: breakdown (skipped)}. Malformed -> stays null.
+            try {
+              let p = 0;
+              while (p < data.length) {
+                const [h, p2] = readVarint(data, p);
+                p = p2;
+                const nf = h >>> 3;
+                const nw = h & 0x07;
+                if (nw === 0) {
+                  const [v, p3] = readVarint(data, p);
+                  p = p3;
+                  if (nf === 1) node.contextUsed = v;
+                  else if (nf === 2) node.contextWindow = v;
+                } else if (nw === 2) {
+                  const [l, p3] = readVarint(data, p);
+                  p = p3 + l;
+                } else if (nw === 1) p += 8;
+                else if (nw === 5) p += 4;
+                else break;
+              }
+            } catch {
+              // malformed gauge — ignore
+            }
             break;
           case 8:
             node.next = data.toString("hex");
@@ -250,6 +279,7 @@ interface WalkedChat {
   agentId: string;
   name: string | null;
   lines: string[]; // one JSON per message: {role, content, id, t}
+  context: { used: number; window: number } | null;
 }
 
 const MAX_CHAIN_NODES = 10_000; // cycle / corruption guard
@@ -261,9 +291,9 @@ interface CursorMessage {
 }
 
 function walkChat(db: SqliteDb): WalkedChat | null {
-  const metaRow = db
-    .prepare("SELECT value FROM meta WHERE key = '0'")
-    .get() as { value?: string } | undefined;
+  const metaRow = db.prepare("SELECT value FROM meta WHERE key = '0'").get() as
+    | { value?: string }
+    | undefined;
   if (!metaRow?.value) return null;
   let meta: {
     agentId?: string;
@@ -277,7 +307,10 @@ function walkChat(db: SqliteDb): WalkedChat | null {
   } catch {
     return null;
   }
-  if (typeof meta.agentId !== "string" || typeof meta.latestRootBlobId !== "string") {
+  if (
+    typeof meta.agentId !== "string" ||
+    typeof meta.latestRootBlobId !== "string"
+  ) {
     return null;
   }
 
@@ -285,11 +318,13 @@ function walkChat(db: SqliteDb): WalkedChat | null {
   const visited = new Set<string>([meta.latestRootBlobId]);
   let nodeId: string | null = meta.latestRootBlobId;
   let hops = 0;
+  let contextUsed: number | null = null;
+  let contextWindow: number | null = null;
   while (nodeId && hops < MAX_CHAIN_NODES) {
     hops++;
-    const row = db
-      .prepare("SELECT data FROM blobs WHERE id = ?")
-      .get(nodeId) as { data?: Uint8Array } | undefined;
+    const row = db.prepare("SELECT data FROM blobs WHERE id = ?").get(nodeId) as
+      | { data?: Uint8Array }
+      | undefined;
     if (!row?.data) break;
     let node: CursorNode;
     try {
@@ -297,39 +332,25 @@ function walkChat(db: SqliteDb): WalkedChat | null {
     } catch {
       break; // corrupted node: keep what we have
     }
+    // The gauge lives on state nodes; keep the last valid one seen in
+    // walk order (root = current state on observed Cursor builds).
+    if (
+      node.contextUsed != null &&
+      node.contextWindow != null &&
+      node.contextWindow > 0
+    ) {
+      contextUsed = node.contextUsed;
+      contextWindow = node.contextWindow;
+    }
     const ts = node.ts ?? Date.now();
     for (const ref of node.refs) {
       if (visited.has(ref)) continue;
       visited.add(ref);
-      const mrow = db
-        .prepare("SELECT data FROM blobs WHERE id = ?")
-        .get(ref) as { data?: Uint8Array } | undefined;
+      const mrow = db.prepare("SELECT data FROM blobs WHERE id = ?").get(ref) as
+        | { data?: Uint8Array }
+        | undefined;
       if (!mrow?.data) continue;
-
- 
- 
- 
- 
- 
-let
- msg
-:
- CursorMessage
- 
-|
- null
- 
-=
-
- 
- 
- 
- 
- 
- 
- 
-null
-;
+      let msg: CursorMessage | null = null;
       try {
         const parsed: unknown = JSON.parse(
           Buffer.from(mrow.data as Uint8Array).toString("utf-8"),
@@ -361,6 +382,10 @@ null
     agentId: meta.agentId,
     name: typeof meta.name === "string" ? meta.name : null,
     lines,
+    context:
+      contextUsed != null && contextWindow != null
+        ? { used: contextUsed, window: contextWindow }
+        : null,
   };
 }
 
@@ -373,11 +398,15 @@ interface CursorChat {
   schemaVersion: string | undefined;
   updatedAtMs: number;
   lines: string[];
+  context: { used: number; window: number } | null;
 }
 
 // Re-polls (tree refresh + history view every ~2s) re-walk the chain unless
 // store.db is untouched: cache keyed on the DB file's mtime.
-const chatCache = new Map<string, { mtimeMs: number; value: CursorChat | null }>();
+const chatCache = new Map<
+  string,
+  { mtimeMs: number; value: CursorChat | null }
+>();
 
 function parseCursorChat(chatDir: string): CursorChat | null {
   let metaJson: {
@@ -427,6 +456,7 @@ function parseCursorChat(chatDir: string): CursorChat | null {
               ? metaJson.updatedAtMs
               : mtimeMs,
           lines: walked.lines,
+          context: walked.context,
         };
       }
     } catch {
@@ -561,8 +591,11 @@ export function parseCursorActivities(lines: string[]): ParseResult {
         const r = b as { type?: string; toolCallId?: string; result?: string };
         if (r && r.type === "tool-result" && typeof r.toolCallId === "string") {
           const text =
-            typeof r.result === "string" ? r.result : JSON.stringify(r.result ?? "");
-          if (!toolResults.has(r.toolCallId)) toolResults.set(r.toolCallId, text);
+            typeof r.result === "string"
+              ? r.result
+              : JSON.stringify(r.result ?? "");
+          if (!toolResults.has(r.toolCallId))
+            toolResults.set(r.toolCallId, text);
         }
       }
     }
@@ -578,8 +611,7 @@ export function parseCursorActivities(lines: string[]): ParseResult {
     }
     const role = o.role;
     const content = o.content;
-    const ts =
-      typeof o.t === "number" ? new Date(o.t) : new Date();
+    const ts = typeof o.t === "number" ? new Date(o.t) : new Date();
     // The chain is chronological, so the first parsed line is the session start.
     if (sessionStartTime === null) sessionStartTime = ts;
     if (role === "user") {
@@ -664,7 +696,9 @@ export function parseCursorActivities(lines: string[]): ParseResult {
 }
 
 /** Resolve a synthetic `cursor:<projHash>/<chatId>` id to activities. */
-export function parseCursorSessionActivities(cursorId: string): ActivityEntry[] {
+export function parseCursorSessionActivities(
+  cursorId: string,
+): ActivityEntry[] {
   const chatDir = join(getCursorChatsDir(), cursorId);
   const chat = parseCursorChat(chatDir);
   if (!chat) return [];
@@ -717,6 +751,7 @@ interface CursorMeta {
   updatedAtMs: number;
   title: string | null;
   model: string | null;
+  context: { used: number; window: number } | null;
 }
 
 function parseCursorMeta(chatDir: string): CursorMeta | null {
@@ -724,7 +759,9 @@ function parseCursorMeta(chatDir: string): CursorMeta | null {
   if (!chat) return null;
   const parsed = parseCursorActivities(chat.lines);
   const title =
-    parsed.activities.find((a) => a.type === "user")?.detail ?? chat.name ?? null;
+    parsed.activities.find((a) => a.type === "user")?.detail ??
+    chat.name ??
+    null;
   return {
     agentId: chat.agentId,
     name: chat.name,
@@ -733,6 +770,7 @@ function parseCursorMeta(chatDir: string): CursorMeta | null {
     updatedAtMs: chat.updatedAtMs,
     title,
     model: parsed.modelName,
+    context: chat.context,
   };
 }
 
@@ -759,6 +797,17 @@ function makeNode(
     provider: "cursor",
     version: meta.schemaVersion,
   };
+  // Context gauge: set only when the walk found a readable field-5
+  // payload (used/window). Window = 0 means "no gauge" so we never
+  // divide by zero or show a 0% bar.
+  if (meta.context && meta.context.window > 0) {
+    const { used, window } = meta.context;
+    node.contextUsage = {
+      used,
+      total: window,
+      percent: Math.min(100, Math.round((used / window) * 100)),
+    };
+  }
   if (hidden) node.hidden = true;
   return node;
 }

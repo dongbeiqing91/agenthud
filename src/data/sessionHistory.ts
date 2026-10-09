@@ -25,12 +25,17 @@ import { dirname } from "node:path";
 import type { ActivityEntry } from "../types/index.js";
 import { claudeProvider } from "./providers/claude.js";
 import { codexProvider, getCodexSessionsDir } from "./providers/codex.js";
+import {
+  CURSOR_PATH_PREFIX,
+  cursorProvider,
+  cursorSessionIdFromPath,
+  parseCursorSessionActivities,
+} from "./providers/cursor.js";
 import { getKiroSessionsDir, kiroProvider } from "./providers/kiro.js";
 import {
   getKiroIdeSessionsDir,
   kiroIdeProvider,
 } from "./providers/kiro-ide.js";
-import { cursorProvider, CURSOR_PATH_PREFIX, cursorSessionIdFromPath, parseCursorSessionActivities } from "./providers/cursor.js";
 import {
   OPENCODE_PATH_PREFIX,
   opencodeProvider,

@@ -58,8 +58,11 @@ CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT);
  "createdAt":1788529172086,"blobEncryptionKey":"<64-hex, unused>"}
 ```
 
-- `latestRootBlobId` — the chain's **first** (oldest) node. Despite the
-  name, walking `field8` from it yields chronological order.
+- `latestRootBlobId` — the **current state node** of the chat. It
+  carries field 1 refs to *all* conversation message blobs (in order),
+  the context gauge (field 5), and a field 8 successor that points at
+  a diff/state blob (payload shape unverified — agenthud follows it,
+  extracts nothing, and stops).
 - `name` — the chat's display name; almost always the generic
   `"New Agent"`, so agenthud titles chats from the first user query.
 
@@ -123,12 +126,26 @@ reader, so Cursor may add fields without breaking agenthud):
 | `22`  | string   | source (`cli` observed)                    |
 | `26`  | varint   | epoch ms — timestamp applied to the node's messages |
 | `27`  | string   | IANA timezone (e.g. `Asia/Shanghai`)       |
-| `2`, `5` | nested messages | config blobs (observed ~303 bytes); not needed for display |
+| `5`   | nested message | context gauge: `{1: usedTokens (varint), 2: windowTokens (varint), 3: repeated breakdown}` — see below |
+| `2`   | nested message | opaque config blob (observed); not needed for display |
 
-**Chain semantics** — `latestRootBlobId` → `field8` → … is a **linked
-list** (never a tree: all local chats have ≤1 successor per node, no
-cycles). Walk order is chronological; each node's `field26` is the
-timestamp of its messages.
+**Context gauge (node field 5)** — nested message:
+
+| Field | Wire type | Meaning                          |
+|-------|-----------|----------------------------------|
+| `1`   | varint    | used tokens (current state)      |
+| `2`   | varint    | context window of the active model |
+| `3`   | repeated nested | per-component breakdown (`system_prompt`, `rules`, `skills`, `mcp`, `subagents`, `summarized_conversation`, `conversation`) — agenthud does not use it |
+
+Observed: `used=26040, window=256000` for a Grok 4.6 chat. Older state
+snapshots of the same chat (also in `blobs`) carry their own field 5; the
+provider takes the gauge from the latest state node that has one.
+
+**Chain semantics** — `latestRootBlobId` → `field8` → … . The root holds
+the full conversation, so the field 8 successor is normally an opaque
+diff blob; the walker follows at most a bounded chain (cycle-guarded via
+a visited set) and only 32-byte field 1 payloads count as message refs,
+so opaque payloads are skipped harmlessly.
 
 ## What the agenthud `cursor` provider consumes
 
@@ -144,8 +161,9 @@ timestamp of its messages.
 - **Activities**: user text → `user`; `reasoning` → `thinking`;
   `text` → `response`; `tool-call` → `tool` (canonical label, args
   detail); `tool`-role results merge into the call's `detailBody`.
-- **Context gauge**: NOT available — the format stores no token usage
-  anywhere; the gauge stays hidden for cursor sessions.
+- **Context gauge**: node field 5 `{used, window}` → `contextUsage`
+  (used / total / percent). Chats whose state nodes carry no readable
+  gauge show no gauge (never an error).
 - **Sub-agents**: NOT mapped in the MVP — cursor-cli sub-agent runs
   (`agent.taskToolCallHandler` traces exist in the app) have no
   verified on-disk shape in the local corpus yet.

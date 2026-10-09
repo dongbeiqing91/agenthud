@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   cursorProvider,
+  cursorSessionPath,
   parseCursorActivities,
   parseCursorSessionActivities,
-  cursorSessionPath,
 } from "../../../src/data/providers/cursor.js";
 import { parseSessionHistory } from "../../../src/data/sessionHistory.js";
 import type { GlobalConfig } from "../../../src/types/index.js";
@@ -16,24 +16,25 @@ import type { GlobalConfig } from "../../../src/types/index.js";
 // node:sqlite is Node 22+. Skip the whole suite where it's missing (CI Node
 // 20) — the provider degrades to isAvailable() === false there, by design.
 let DatabaseSync:
-  | new (
-      path: string,
-      opts?: { readOnly?: boolean },
-    ) => {
-      exec(s: string): void;
-      prepare(s: string): {
-        run(...a: unknown[]): void;
-        get(...a: unknown[]): unknown;
-        all(...a: unknown[]): unknown[];
+  | {
+      new (
+        path: string,
+        opts?: { readOnly?: boolean },
+      ): {
+        exec(s: string): void;
+        prepare(s: string): {
+          run(...a: unknown[]): void;
+          get(...a: unknown[]): unknown;
+          all(...a: unknown[]): unknown[];
+        };
+        close(): void;
       };
-      close(): void;
     }
   | undefined;
 let sqliteAvailable = false;
 try {
-  DatabaseSync = createRequire(import.meta.url)(
-    "node:sqlite",
-  ).DatabaseSync as typeof DatabaseSync;
+  DatabaseSync = createRequire(import.meta.url)("node:sqlite")
+    .DatabaseSync as typeof DatabaseSync;
   sqliteAvailable = true;
 } catch {
   // node:sqlite unavailable
@@ -100,11 +101,23 @@ interface FixtureChat {
   schemaVersion?: number;
   hasConversation?: boolean;
   /**
-   * Chronological chain nodes: nodes[0] is the ROOT (oldest) and its
-   * field8 points to nodes[1], and so on. Each node carries its own
-   * field26 timestamp applied to its messages.
+   * Chronological chain nodes: nodes[0] is the ROOT (its field8 points to
+   * nodes[1], and so on). Each node carries its own field26 timestamp
+   * applied to its messages.
    */
   nodes: { ts: number; messages: FixtureMessage[] }[];
+  /**
+   * Context gauge (state-node field 5: {1: used, 2: window}). Encoded on
+   * the LAST walked node (newest state) — the provider takes the gauge from
+   * the latest state node that carries one.
+   */
+  context?: { used: number; window: number };
+  /**
+   * Real-data shape: the root's field8 points to an OPAQUE blob (a
+   * field-1 payload that is not a 32-byte message ref). The walker must
+   * follow it, extract nothing, and stop without error.
+   */
+  danglingNextBytes?: number;
 }
 
 let ROOT = "";
@@ -112,6 +125,19 @@ let ROOT = "";
 function buildChat(chat: FixtureChat): void {
   const chatDir = join(ROOT, chat.projHash, chat.chatId);
   mkdirSync(chatDir, { recursive: true });
+
+  // Opaque successor blob (real-data shape): one f1 with a payload that is
+  // neither a 32-byte ref nor JSON.
+  let opaqueId: string | null = null;
+  let opaqueBuf: Buffer | null = null;
+  if (chat.danglingNextBytes != null) {
+    opaqueBuf = Buffer.concat([
+      tag(1, 2),
+      encVarint(chat.danglingNextBytes),
+      Buffer.alloc(chat.danglingNextBytes, 0xaa),
+    ]);
+    opaqueId = sha(opaqueBuf);
+  }
 
   // Message blobs (content-addressed).
   const msgBlob = new Map<string, Buffer>();
@@ -131,7 +157,20 @@ function buildChat(chat: FixtureChat): void {
     const node = chat.nodes[i];
     const parts: Buffer[] = [];
     for (const id of msgIdsPerNode[i]) parts.push(refField(1, id));
+    if (chat.context && i === chat.nodes.length - 1) {
+      parts.push(
+        lenField(
+          5,
+          Buffer.concat([
+            uintField(1, chat.context.used),
+            uintField(2, chat.context.window),
+          ]),
+        ),
+      );
+    }
     if (i < chat.nodes.length - 1) parts.push(refField(8, built[0].id));
+    else if (chat.nodes.length === 1 && opaqueId)
+      parts.push(refField(8, opaqueId));
     parts.push(strField(9, `file://${chat.cwd}`));
     parts.push(uintField(10, 1));
     parts.push(strField(22, "cli"));
@@ -149,6 +188,7 @@ function buildChat(chat: FixtureChat): void {
   );
   const insBlob = db.prepare("INSERT INTO blobs (id, data) VALUES (?, ?)");
   for (const n of built) insBlob.run(n.id, n.buf);
+  if (opaqueId && opaqueBuf) insBlob.run(opaqueId, opaqueBuf);
   for (const [id, buf] of msgBlob) insBlob.run(id, buf);
   db.prepare("INSERT INTO meta (key, value) VALUES ('0', ?)").run(
     Buffer.from(
@@ -204,10 +244,18 @@ const userMsg = (text: string): FixtureMessage => ({
   role: "user",
   content: [{ type: "text", text }],
 });
-const assistantMsg = (
-  blocks: object[],
-  id = "as1",
-): FixtureMessage => ({
+// Real cursor-cli user queries are wrapped in a <user_query> tag, prefixed
+// by a <timestamp> block in the same text block.
+const userQueryMsg = (text: string): FixtureMessage => ({
+  role: "user",
+  content: [
+    {
+      type: "text",
+      text: `<timestamp>Friday, Sep 4, 2026, 10:19 PM (UTC+8)</timestamp>\n<user_query>\n${text}\n</user_query>`,
+    },
+  ],
+});
+const assistantMsg = (blocks: object[], id = "as1"): FixtureMessage => ({
   role: "assistant",
   content: blocks,
   id,
@@ -219,9 +267,7 @@ const toolResultMsg = (
   result: string,
 ): FixtureMessage => ({
   role: "tool",
-  content: [
-    { type: "tool-result", toolCallId, toolName, result },
-  ],
+  content: [{ type: "tool-result", toolCallId, toolName, result }],
 });
 
 describe.skipIf(!sqliteAvailable)("cursorProvider.isAvailable", () => {
@@ -258,7 +304,9 @@ describe.skipIf(!sqliteAvailable)("cursorProvider.discoverSessions", () => {
         {
           ts: now,
           messages: [
-            assistantMsg([{ type: "text", text: "On it — checking the build now." }]),
+            assistantMsg([
+              { type: "text", text: "On it — checking the build now." },
+            ]),
           ],
         },
       ],
@@ -277,7 +325,34 @@ describe.skipIf(!sqliteAvailable)("cursorProvider.discoverSessions", () => {
     expect(s.filePath).toBe(cursorSessionPath("deadbeef", "chat-1"));
     expect(s.version).toBe("1");
     expect(s.status).toBe("hot");
+    // no f5 gauge in this fixture
+    expect(s.contextUsage).toBeUndefined();
     expect(tree.totalCount).toBe(1);
+  });
+
+  it("sets contextUsage from the latest state node's f5 gauge", () => {
+    const now = Date.now();
+    buildChat({
+      projHash: "gaugeproj",
+      chatId: "chat-g",
+      name: "G",
+      cwd: "/Users/neo/gaugeproj",
+      createdAtMs: now - 5000,
+      updatedAtMs: now,
+      context: { used: 26040, window: 256000 },
+      nodes: [
+        {
+          ts: now - 4000,
+          messages: [sysMsg("Cursor Grok 4.6"), userMsg("hello gauge world")],
+        },
+      ],
+    });
+    const s = cursorProvider.discoverSessions(config).projects[0].sessions[0];
+    expect(s.contextUsage).toEqual({
+      used: 26040,
+      total: 256000,
+      percent: 10, // 26040/256000 = 10.17%
+    });
   });
 
   it("skips chats without a conversation (no store.db)", () => {
@@ -377,7 +452,11 @@ describe.skipIf(!sqliteAvailable)(
             messages: [
               assistantMsg(
                 [
-                  { type: "reasoning", text: "I should list files first.", signature: "sig1" },
+                  {
+                    type: "reasoning",
+                    text: "I should list files first.",
+                    signature: "sig1",
+                  },
                   {
                     type: "tool-call",
                     toolCallId: "call-abc-0",
@@ -395,8 +474,15 @@ describe.skipIf(!sqliteAvailable)(
             messages: [
               assistantMsg(
                 [
-                  { type: "reasoning", text: "Tests are green.", signature: "sig2" },
-                  { type: "text", text: "All three tests passed, nothing to fix." },
+                  {
+                    type: "reasoning",
+                    text: "Tests are green.",
+                    signature: "sig2",
+                  },
+                  {
+                    type: "text",
+                    text: "All three tests passed, nothing to fix.",
+                  },
                 ],
                 "as2",
               ),
@@ -442,13 +528,84 @@ describe.skipIf(!sqliteAvailable)(
   },
 );
 
+describe.skipIf(!sqliteAvailable)(
+  "real-data shape: root holds all messages, opaque field8 successor",
+  () => {
+    const buildFixture = () => {
+      const now = Date.now();
+      buildChat({
+        projHash: "realshape",
+        chatId: "chat-r",
+        name: "New Agent",
+        cwd: "/Users/neo/realshape",
+        createdAtMs: now - 9000,
+        updatedAtMs: now,
+        context: { used: 1000, window: 180000 },
+        // root's field8 → opaque 616B payload blob (as in the live corpus)
+        danglingNextBytes: 616,
+        nodes: [
+          {
+            ts: now - 4000,
+            messages: [
+              sysMsg("Cursor Grok 4.6"),
+              userInfoMsg(),
+              userQueryMsg("do the thing"),
+              assistantMsg(
+                [
+                  {
+                    type: "tool-call",
+                    toolCallId: "call-r-0",
+                    toolName: "Glob",
+                    args: { pattern: "*.ts" },
+                  },
+                ],
+                "asr1",
+              ),
+              toolResultMsg("call-r-0", "Glob", "3 files found"),
+              assistantMsg(
+                [{ type: "text", text: "Done — three files matched." }],
+                "asr2",
+              ),
+            ],
+          },
+        ],
+      });
+    };
+    beforeEach(buildFixture);
+
+    it("walks past the opaque successor and extracts all messages", () => {
+      const acts = parseCursorSessionActivities("realshape/chat-r");
+      const user = acts.find((a) => a.type === "user");
+      // <user_query> content survives, <timestamp> noise does not
+      expect(user?.detail).toBe("do the thing");
+      expect(acts.find((a) => a.type === "tool")?.label).toBe("Glob");
+      expect(acts.find((a) => a.type === "response")?.detailBody).toBe(
+        "Done — three files matched.",
+      );
+    });
+
+    it("keeps the gauge from the root state node", () => {
+      const s = cursorProvider.discoverSessions(config).projects[0].sessions[0];
+      expect(s.contextUsage).toEqual({
+        used: 1000,
+        total: 180000,
+        percent: 1, // 0.55% rounds to 1
+      });
+    });
+  },
+);
+
 describe.skipIf(!sqliteAvailable)("parseCursorActivities (unit)", () => {
   const line = (o: object) => JSON.stringify(o);
   const T = 1_800_000_000_000;
 
   it("maps user text to a user activity", () => {
     const r = parseCursorActivities([
-      line({ role: "user", content: [{ type: "text", text: "hello world" }], t: T }),
+      line({
+        role: "user",
+        content: [{ type: "text", text: "hello world" }],
+        t: T,
+      }),
     ]);
     expect(r.activities).toHaveLength(1);
     expect(r.activities[0].type).toBe("user");
@@ -457,8 +614,18 @@ describe.skipIf(!sqliteAvailable)("parseCursorActivities (unit)", () => {
 
   it("skips user_info / timestamp noise", () => {
     const r = parseCursorActivities([
-      line({ role: "user", content: "<user_info>\nOS: mac\n</user_info>", t: T }),
-      line({ role: "user", content: [{ type: "text", text: "<timestamp>Friday, Sep 4</timestamp>" }], t: T }),
+      line({
+        role: "user",
+        content: "<user_info>\nOS: mac\n</user_info>",
+        t: T,
+      }),
+      line({
+        role: "user",
+        content: [
+          { type: "text", text: "<timestamp>Friday, Sep 4</timestamp>" },
+        ],
+        t: T,
+      }),
     ]);
     expect(r.activities).toHaveLength(0);
   });
@@ -479,7 +646,12 @@ describe.skipIf(!sqliteAvailable)("parseCursorActivities (unit)", () => {
 
   it("skips system messages but recovers the model name", () => {
     const r = parseCursorActivities([
-      line({ role: "system", content: "You are an AI coding assistant, powered by Composer 2.5. More.", t: T }),
+      line({
+        role: "system",
+        content:
+          "You are an AI coding assistant, powered by Composer 2.5. More.",
+        t: T,
+      }),
       line({ role: "user", content: "hi there friend", t: T }),
     ]);
     expect(r.activities).toHaveLength(1);
@@ -491,7 +663,12 @@ describe.skipIf(!sqliteAvailable)("parseCursorActivities (unit)", () => {
       line({
         role: "assistant",
         content: [
-          { type: "tool-call", toolCallId: "c1", toolName: "Glob", args: { pattern: "*.ts" } },
+          {
+            type: "tool-call",
+            toolCallId: "c1",
+            toolName: "Glob",
+            args: { pattern: "*.ts" },
+          },
         ],
         t: T,
       }),
@@ -504,10 +681,21 @@ describe.skipIf(!sqliteAvailable)("parseCursorActivities (unit)", () => {
 
   it("extracts the real query from a <user_query>-wrapped block", () => {
     const r = parseCursorActivities([
-      line({ role: "user", content: [{ type: "text", text: "<timestamp>Friday, Sep 4</timestamp>\n<user_query>\nList the files, then write 200 words\n</user_query>" }], t: T }),
+      line({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "<timestamp>Friday, Sep 4</timestamp>\n<user_query>\nList the files, then write 200 words\n</user_query>",
+          },
+        ],
+        t: T,
+      }),
     ]);
     expect(r.activities).toHaveLength(1);
-    expect(r.activities[0].detail).toContain("List the files, then write 200 words");
+    expect(r.activities[0].detail).toContain(
+      "List the files, then write 200 words",
+    );
     expect(r.activities[0].detail).not.toContain("<timestamp>");
   });
 

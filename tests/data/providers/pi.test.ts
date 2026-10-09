@@ -11,11 +11,9 @@ vi.mock("node:fs", () => ({
 const { existsSync, readdirSync, statSync, readFileSync } = await import(
   "node:fs"
 );
-const {
-  piProvider,
-  parsePiActivities,
-  clearPiMetaCache,
-} = await import("../../../src/data/providers/pi.js");
+const { piProvider, parsePiActivities, clearPiMetaCache } = await import(
+  "../../../src/data/providers/pi.js"
+);
 
 const NOW = 1_700_000_000_000;
 
@@ -29,7 +27,6 @@ const mockConfig = {
 
 const ROOT = join("/tmp", "pi-test", "sessions");
 const PROJECT_DIR = join(ROOT, "--Users-neo-piapp--");
-const SESSION_FILE = join(PROJECT_DIR, "2026-10-09T09-01-41-601Z_sid1.jsonl");
 const CWD = "/Users/neo/piapp";
 const MODEL_ID = "qwen3-8-27b-fp8-gpu/qwen3-8-27b-fp8";
 const PROVIDER_KEY = "magpie";
@@ -117,7 +114,11 @@ function sessionInfo(id: string, parentId: string, name: string) {
   };
 }
 
-function compaction(id: string, parentId: string, over: Record<string, unknown> = {}) {
+function compaction(
+  id: string,
+  parentId: string,
+  over: Record<string, unknown> = {},
+) {
   return {
     type: "compaction",
     id,
@@ -129,7 +130,12 @@ function compaction(id: string, parentId: string, over: Record<string, unknown> 
   };
 }
 
-function toolResult(id: string, parentId: string, toolCallId: string, text: string) {
+function toolResult(
+  id: string,
+  parentId: string,
+  toolCallId: string,
+  text: string,
+) {
   return {
     type: "message",
     id,
@@ -156,16 +162,19 @@ function healthyRecords() {
       "u1",
       [
         { type: "thinking", thinking: "I should read the file." },
-        { type: "toolCall", id: "tc1", name: "read", arguments: { path: join(CWD, "config.yaml") } },
+        {
+          type: "toolCall",
+          id: "tc1",
+          name: "read",
+          arguments: { path: join(CWD, "config.yaml") },
+        },
       ],
       { stopReason: "toolUse" },
     ),
     toolResult("r1", "a1", "tc1", "key: value"),
-    assistantMsg(
-      "a2",
-      "r1",
-      [{ type: "text", text: "The config has one key set." }],
-    ),
+    assistantMsg("a2", "r1", [
+      { type: "text", text: "The config has one key set." },
+    ]),
     sessionInfo("s1", "a2", "Config exploration"),
   ];
 }
@@ -181,7 +190,9 @@ function mockTree(files: Record<string, string>, oldFiles: string[] = []) {
   vi.mocked(readdirSync).mockImplementation((p) => {
     const path = String(p);
     if (path === ROOT)
-      return ["--Users-neo-piapp--"] as unknown as ReturnType<typeof readdirSync>;
+      return ["--Users-neo-piapp--"] as unknown as ReturnType<
+        typeof readdirSync
+      >;
     if (path === PROJECT_DIR)
       return Object.keys(files) as unknown as ReturnType<typeof readdirSync>;
     return [] as unknown as ReturnType<typeof readdirSync>;
@@ -236,7 +247,9 @@ describe("piProvider.isAvailable", () => {
 describe("piProvider.discoverSessions", () => {
   it("discovers a session grouped by the header cwd", () => {
     setRoot();
-    mockTree({ "2026-10-09T09-01-41-601Z_sid1.jsonl": recordsToLines(healthyRecords()) });
+    mockTree({
+      "2026-10-09T09-01-41-601Z_sid1.jsonl": recordsToLines(healthyRecords()),
+    });
 
     const tree = piProvider.discoverSessions(mockConfig);
     expect(tree.projects).toHaveLength(1);
@@ -265,9 +278,13 @@ describe("piProvider.discoverSessions", () => {
         header({ id: "sid2" }),
         modelChange("m1", null, MODEL_ID),
         userMsg("u1", "m1", "first prompt"),
-        assistantMsg("a1", "u1", [{ type: "text", text: "Working on it, here is a reply." }]),
+        assistantMsg("a1", "u1", [
+          { type: "text", text: "Working on it, here is a reply." },
+        ]),
         userMsg("u2", "a1", "second question"),
-        assistantMsg("a2", "u2", [{ type: "text", text: "Another reply that is long enough." }]),
+        assistantMsg("a2", "u2", [
+          { type: "text", text: "Another reply that is long enough." },
+        ]),
       ]),
     });
 
@@ -287,14 +304,18 @@ describe("piProvider.discoverSessions", () => {
         header({ id: "sid3" }),
         modelChange("m1", null, "old/old-model"),
         userMsg("u1", "m1", "start"),
-        assistantMsg("a1", "u1", [{ type: "text", text: "Acknowledged, starting work now." }]),
+        assistantMsg("a1", "u1", [
+          { type: "text", text: "Acknowledged, starting work now." },
+        ]),
         // dead fork (rolled back, never revisited)
         userMsg("d1", "a1", "abandoned question"),
         modelChange("d2", "d1", "dead/dead-model"),
         // active continuation from a1
         userMsg("u2", "a1", "real question"),
         modelChange("m2", "u2", MODEL_ID),
-        assistantMsg("a2", "m2", [{ type: "text", text: "Answering the real question now." }]),
+        assistantMsg("a2", "m2", [
+          { type: "text", text: "Answering the real question now." },
+        ]),
       ]),
     });
 
@@ -319,10 +340,9 @@ describe("piProvider.discoverSessions", () => {
 
   it("moves projects whose sessions are all stale to coldProjects", () => {
     setRoot();
-    mockTree(
-      { "x_old.jsonl": recordsToLines(healthyRecords()) },
-      ["x_old.jsonl"],
-    );
+    mockTree({ "x_old.jsonl": recordsToLines(healthyRecords()) }, [
+      "x_old.jsonl",
+    ]);
     const tree = piProvider.discoverSessions(mockConfig);
     expect(tree.projects).toHaveLength(0);
     expect(tree.coldProjects).toHaveLength(1);
@@ -358,14 +378,10 @@ describe("parsePiActivities", () => {
       header(),
       modelChange("m1", null, MODEL_ID),
       userMsg("u1", "m1", "read the config"),
-      assistantMsg(
-        "a1",
-        "u1",
-        [
-          { type: "thinking", thinking: "Let me look." },
-          { type: "text", text: "The config has one key set." },
-        ],
-      ),
+      assistantMsg("a1", "u1", [
+        { type: "thinking", thinking: "Let me look." },
+        { type: "text", text: "The config has one key set." },
+      ]),
     ]).split("\n");
 
     const { activities, sessionStartTime } = parsePiActivities(lines);
@@ -383,24 +399,41 @@ describe("parsePiActivities", () => {
     const lines = recordsToLines([
       header(),
       userMsg("u1", null, "go"),
-      assistantMsg(
-        "a1",
-        "u1",
-        [
-          { type: "toolCall", id: "tc1", name: "read", arguments: { path: join(CWD, "config.yaml") } },
-          { type: "toolCall", id: "tc2", name: "bash", arguments: { command: "npm test" } },
-          { type: "toolCall", id: "tc3", name: "lens_diagnostics", arguments: {} },
-        ],
-      ),
+      assistantMsg("a1", "u1", [
+        {
+          type: "toolCall",
+          id: "tc1",
+          name: "read",
+          arguments: { path: join(CWD, "config.yaml") },
+        },
+        {
+          type: "toolCall",
+          id: "tc2",
+          name: "bash",
+          arguments: { command: "npm test" },
+        },
+        {
+          type: "toolCall",
+          id: "tc3",
+          name: "lens_diagnostics",
+          arguments: {},
+        },
+      ]),
       toolResult("r1", "a1", "tc1", "content"),
       toolResult("r2", "a1", "tc2", "ok"),
       toolResult("r3", "a1", "tc3", "ok"),
-      assistantMsg("a2", "r3", [{ type: "text", text: "Done with the three tool calls above." }]),
+      assistantMsg("a2", "r3", [
+        { type: "text", text: "Done with the three tool calls above." },
+      ]),
     ]).split("\n");
 
     const { activities } = parsePiActivities(lines);
     const tools = activities.filter((a) => a.type === "tool");
-    expect(tools.map((t) => t.label)).toEqual(["Read", "Bash", "lens_diagnostics"]);
+    expect(tools.map((t) => t.label)).toEqual([
+      "Read",
+      "Bash",
+      "lens_diagnostics",
+    ]);
     // read detail comes from the path argument (normalized to file_path)
     expect(tools[0].detail).toBe("config.yaml");
     expect(tools[1].detail).toBe("npm test");
@@ -412,17 +445,25 @@ describe("parsePiActivities", () => {
     const lines = recordsToLines([
       header(),
       userMsg("u1", null, "go"),
-      assistantMsg(
-        "a1",
-        "u1",
-        [
-          { type: "toolCall", id: "tc1", name: "read", arguments: { path: join(CWD, "a.ts") } },
-          { type: "toolCall", id: "tc2", name: "read", arguments: { path: join(CWD, "a.ts") } },
-        ],
-      ),
+      assistantMsg("a1", "u1", [
+        {
+          type: "toolCall",
+          id: "tc1",
+          name: "read",
+          arguments: { path: join(CWD, "a.ts") },
+        },
+        {
+          type: "toolCall",
+          id: "tc2",
+          name: "read",
+          arguments: { path: join(CWD, "a.ts") },
+        },
+      ]),
       toolResult("r1", "a1", "tc1", "x"),
       toolResult("r2", "a1", "tc2", "y"),
-      assistantMsg("a2", "r2", [{ type: "text", text: "Finished reading the same file twice." }]),
+      assistantMsg("a2", "r2", [
+        { type: "text", text: "Finished reading the same file twice." },
+      ]),
     ]).split("\n");
 
     const { activities } = parsePiActivities(lines);
@@ -435,10 +476,14 @@ describe("parsePiActivities", () => {
     const lines = recordsToLines([
       header(),
       userMsg("u1", null, "start"),
-      assistantMsg("a1", "u1", [{ type: "text", text: "Some work happens here in the session." }]),
+      assistantMsg("a1", "u1", [
+        { type: "text", text: "Some work happens here in the session." },
+      ]),
       compaction("c1", "a1"),
       userMsg("u2", "c1", "continue"),
-      assistantMsg("a2", "u2", [{ type: "text", text: "Continuing after compaction now." }]),
+      assistantMsg("a2", "u2", [
+        { type: "text", text: "Continuing after compaction now." },
+      ]),
     ]).split("\n");
 
     const { activities } = parsePiActivities(lines);
@@ -456,7 +501,11 @@ describe("parsePiActivities", () => {
         id: "b1",
         parentId: null,
         timestamp: "2026-10-09T09:02:00.000Z",
-        message: { role: "bashExecution", command: "ls -la", output: "total 8" },
+        message: {
+          role: "bashExecution",
+          command: "ls -la",
+          output: "total 8",
+        },
       },
     ]).split("\n");
 
@@ -473,19 +522,23 @@ describe("parsePiActivities", () => {
     // The leaf is the last line; dead entries are off-path.
     const lines = recordsToLines([
       userMsg("u1", null, "start"),
-      assistantMsg("a1", "u1", [{ type: "text", text: "Acknowledged, starting work now." }]),
+      assistantMsg("a1", "u1", [
+        { type: "text", text: "Acknowledged, starting work now." },
+      ]),
       userMsg("d1", "a1", "abandoned question"),
-      assistantMsg(
-        "d2",
-        "d1",
-        [{ type: "text", text: "Answer to the abandoned question here." }],
-      ),
+      assistantMsg("d2", "d1", [
+        { type: "text", text: "Answer to the abandoned question here." },
+      ]),
       userMsg("u2", "a1", "real question"),
-      assistantMsg("a2", "u2", [{ type: "text", text: "Answering the real question now." }]),
+      assistantMsg("a2", "u2", [
+        { type: "text", text: "Answering the real question now." },
+      ]),
     ]).split("\n");
 
     const { activities } = parsePiActivities(lines);
-    expect(activities.some((a) => a.detail === "abandoned question")).toBe(false);
+    expect(activities.some((a) => a.detail === "abandoned question")).toBe(
+      false,
+    );
     expect(activities.some((a) => a.detail === "real question")).toBe(true);
     expect(activities.some((a) => a.detail === "start")).toBe(true);
   });
@@ -500,7 +553,9 @@ describe("piProvider.isTurnBoundary", () => {
   const isTurnBoundary = piProvider.isTurnBoundary!;
 
   it("true for user messages", () => {
-    expect(isTurnBoundary(JSON.stringify(userMsg("u1", null, "hi")))).toBe(true);
+    expect(isTurnBoundary(JSON.stringify(userMsg("u1", null, "hi")))).toBe(
+      true,
+    );
   });
 
   it("true for compaction and branch_summary entries", () => {
@@ -518,9 +573,17 @@ describe("piProvider.isTurnBoundary", () => {
   });
 
   it("false for assistant, toolResult, and control entries", () => {
-    expect(isTurnBoundary(JSON.stringify(assistantMsg("a1", "u1", [{ type: "text", text: "x" }])))).toBe(false);
-    expect(isTurnBoundary(JSON.stringify(toolResult("r1", "a1", "tc1", "y")))).toBe(false);
-    expect(isTurnBoundary(JSON.stringify(modelChange("m1", null, MODEL_ID)))).toBe(false);
+    expect(
+      isTurnBoundary(
+        JSON.stringify(assistantMsg("a1", "u1", [{ type: "text", text: "x" }])),
+      ),
+    ).toBe(false);
+    expect(
+      isTurnBoundary(JSON.stringify(toolResult("r1", "a1", "tc1", "y"))),
+    ).toBe(false);
+    expect(
+      isTurnBoundary(JSON.stringify(modelChange("m1", null, MODEL_ID))),
+    ).toBe(false);
   });
 
   it("false for malformed lines", () => {

@@ -83,7 +83,7 @@ export function getPiSessionsDir(): string {
 // Overridable for tests / custom agent roots.
 function getPiModelsFile(): string {
   return (
-    process.env.PI_MODELS_FILE ?? dirname(getPiSessionsDir()) + "/models.json"
+    process.env.PI_MODELS_FILE ?? `${dirname(getPiSessionsDir())}/models.json`
   );
 }
 
@@ -181,9 +181,7 @@ function walkActiveBranch(entries: PiEntry[]): PiEntry[] {
   let guard = 0;
   while (current && guard++ < 1_000_000) {
     path.push(current);
-    current = current.parentId
-      ? byId.get(current.parentId)
-      : undefined;
+    current = current.parentId ? byId.get(current.parentId) : undefined;
   }
   path.reverse();
   return path;
@@ -272,7 +270,11 @@ function contextUsageFor(
   const total = windows.get(`${msg.provider}/${msg.model}`);
   if (total === undefined || total <= 0) return null;
   const used = usageTotal(msg.usage);
-  return { used, total, percent: Math.min(100, Math.round((used / total) * 100)) };
+  return {
+    used,
+    total,
+    percent: Math.min(100, Math.round((used / total) * 100)),
+  };
 }
 
 // --- discovery ---
@@ -287,10 +289,7 @@ interface PiMeta {
 }
 
 // (path, mtime)-keyed metadata cache, like codex's.
-const metaCache = new Map<
-  string,
-  { mtimeMs: number; value: PiMeta | null }
->();
+const metaCache = new Map<string, { mtimeMs: number; value: PiMeta | null }>();
 
 /** Test hook: the module-level cache collides on fake (path, mtime)
  * pairs across test cases. Production never needs this. */
@@ -522,7 +521,8 @@ function discoverPiSessions(config: GlobalConfig): SessionTree {
 
 // pi args use `path`; the shared summarizers expect Claude's `file_path`.
 function normalizeToolInput(args: unknown): ToolInput | undefined {
-  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+  if (!args || typeof args !== "object" || Array.isArray(args))
+    return undefined;
   const rec = args as Record<string, unknown>;
   const input = { ...rec } as ToolInput;
   if (typeof input.file_path !== "string" && typeof rec.path === "string") {
@@ -655,7 +655,11 @@ export function parsePiActivities(lines: string[]): ParseResult {
         if (isUsableUsage(msg)) tokenCount += usageTotal(msg.usage);
         if (Array.isArray(msg.content)) {
           for (const block of msg.content) {
-            if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
+            if (
+              block.type === "thinking" &&
+              typeof block.thinking === "string" &&
+              block.thinking.trim()
+            ) {
               activities.push({
                 timestamp: ts,
                 type: "thinking",
@@ -665,7 +669,11 @@ export function parsePiActivities(lines: string[]): ParseResult {
               });
             } else if (block.type === "toolCall" && block.name) {
               pushToolCall(activities, ts, block, resultsById);
-            } else if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+            } else if (
+              block.type === "text" &&
+              typeof block.text === "string" &&
+              block.text.trim()
+            ) {
               activities.push({
                 timestamp: ts,
                 type: "response",
@@ -678,8 +686,7 @@ export function parsePiActivities(lines: string[]): ParseResult {
           }
         }
       } else if (msg.role === "bashExecution") {
-        const command =
-          typeof msg.command === "string" ? msg.command : "";
+        const command = typeof msg.command === "string" ? msg.command : "";
         if (!command.trim()) continue;
         activities.push({
           timestamp: ts,
@@ -687,8 +694,7 @@ export function parsePiActivities(lines: string[]): ParseResult {
           icon: ICONS.Bash,
           label: "Bash",
           detail: firstLine(command),
-          detailBody:
-            typeof msg.output === "string" ? msg.output : undefined,
+          detailBody: typeof msg.output === "string" ? msg.output : undefined,
           detailKind: "code",
         });
       }
@@ -734,11 +740,7 @@ export const piProvider: SessionProvider = {
       if (e.type === "compaction" || e.type === "branch_summary") return true;
       if (e.type === "message") {
         const role = e.message?.role;
-        return (
-          role === "user" ||
-          role === "bashExecution" ||
-          role === "custom"
-        );
+        return role === "user" || role === "bashExecution" || role === "custom";
       }
       return false;
     } catch {
