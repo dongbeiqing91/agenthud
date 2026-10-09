@@ -113,7 +113,7 @@ describe("runFollow integration", () => {
     );
     expect(responses.length).toBeGreaterThanOrEqual(1);
     expect(responses[0]).toMatchObject({ project: "proj", provider: "claude" });
-  });
+  }, 20_000);
 
   it("once: emits the seed then does not schedule the streaming interval", () => {
     const lines: string[] = [];

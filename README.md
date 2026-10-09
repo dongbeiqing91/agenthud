@@ -4,7 +4,7 @@
 [![CI](https://github.com/neochoon/agenthud/actions/workflows/ci.yml/badge.svg)](https://github.com/neochoon/agenthud/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/neochoon/agenthud/branch/main/graph/badge.svg)](https://codecov.io/gh/neochoon/agenthud)
 
-A **heads-up display** for your AI coding agents — **Claude Code**, **OpenAI Codex**, **AWS Kiro**, **opencode**, and **pi**. AgentHUD reads each agent's on-disk sessions (JSONL files, or opencode's SQLite store) and merges them into one tree, so a project you've touched from several agents shows as a single row with combined sessions and sub-agents.
+A **heads-up display** for your AI coding agents — **Claude Code**, **OpenAI Codex**, **AWS Kiro**, **opencode**, **pi**, and **Cursor**. AgentHUD reads each agent's on-disk sessions (JSONL files, opencode's SQLite store, or Cursor's per-chat blob databases) and merges them into one tree, so a project you've touched from several agents shows as a single row with combined sessions and sub-agents.
 
 ![demo](./demo/live.gif)
 
@@ -15,9 +15,9 @@ It's organized as **three layers, by who's reading** — a human at a glance, a 
 - **`agenthud report`** — **the machine layer.** Structured Markdown / JSON. `summary` is literally `report` piped into an agent CLI, so the daily digest isn't a black box — and you can pipe `report` into anything else, too.
 - **`agenthud follow`** — **the live machine feed.** A chronologically-merged stream of every event (activity + state + lifecycle) across all sessions and sub-agents, as human lines or `--json` NDJSON — the read-only substrate a higher-level supervisor can consume. See [FEATURES.md](./FEATURES.md#follow).
 
-→ **See [FEATURES.md](./FEATURES.md) for the full surface** — every flag, keybinding, config key, file path, and env var. Per-agent session schemas: [Claude Code](./docs/schemas/claude-session.md) · [Codex CLI](./docs/schemas/codex-session.md) · [Kiro IDE](./docs/schemas/kiro-ide-session.md) · [Kiro CLI](./docs/schemas/kiro-session.md) · [opencode](./docs/schemas/opencode-session.md) · [pi](./docs/schemas/pi-session.md) (or browse [docs/schemas/](./docs/schemas/)).
+→ **See [FEATURES.md](./FEATURES.md) for the full surface** — every flag, keybinding, config key, file path, and env var. Per-agent session schemas: [Claude Code](./docs/schemas/claude-session.md) · [Codex CLI](./docs/schemas/codex-session.md) · [Kiro IDE](./docs/schemas/kiro-ide-session.md) · [Kiro CLI](./docs/schemas/kiro-session.md) · [opencode](./docs/schemas/opencode-session.md) · [pi](./docs/schemas/pi-session.md) · [Cursor](./docs/schemas/cursor-session.md) (or browse [docs/schemas/](./docs/schemas/)).
 
-Requires Node.js 20+ (opencode sessions need Node 22+ — they're read via the built-in `node:sqlite`; on older Node, opencode is simply skipped and everything else works). Open agenthud in a separate terminal while you work; press `?` inside the TUI for in-app help.
+Requires Node.js 20+ (opencode and Cursor sessions need Node 22+ — they're read via the built-in `node:sqlite`; on older Node those providers are simply skipped and everything else works). Open agenthud in a separate terminal while you work; press `?` inside the TUI for in-app help.
 
 ## Try without installing
 
@@ -84,7 +84,7 @@ The badge tells you, per session, **what the agent is doing right now**:
 - `[working]` — there's a pending tool call at the tail; the agent is mid-step.
 - `[waiting]` — the turn yielded back to you (a question, or a finished reply).
 
-These live states are read from the structure of each session's JSONL tail and **override** the time-based recency badges (`[hot]` / `[warm]` / `[cool]` / `[cold]`) whenever a session is live. Each row also carries a colored provider label (`claude` / `codex` / `kiro` / `kiro-ide` / `opencode` / `pi`), its model, and a context-window gauge; only hot/warm (and live) sessions count as active and render bright. Sub-agents nest under their parent regardless of which agent spawned them, the panel title is a tree-wide census, and cold projects collapse under a `... N cold projects` sentinel.
+These live states are read from the structure of each session's JSONL tail and **override** the time-based recency badges (`[hot]` / `[warm]` / `[cool]` / `[cold]`) whenever a session is live. Each row also carries a colored provider label (`claude` / `codex` / `kiro` / `kiro-ide` / `opencode` / `pi` / `cursor`), its model, and a context-window gauge; only hot/warm (and live) sessions count as active and render bright. Sub-agents nest under their parent regardless of which agent spawned them, the panel title is a tree-wide census, and cold projects collapse under a `... N cold projects` sentinel.
 
 Full keybinding and badge reference: [FEATURES.md](./FEATURES.md#keybindings).
 

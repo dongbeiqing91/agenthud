@@ -30,6 +30,7 @@ import {
   getKiroIdeSessionsDir,
   kiroIdeProvider,
 } from "./providers/kiro-ide.js";
+import { cursorProvider, CURSOR_PATH_PREFIX, cursorSessionIdFromPath, parseCursorSessionActivities } from "./providers/cursor.js";
 import {
   OPENCODE_PATH_PREFIX,
   opencodeProvider,
@@ -49,6 +50,7 @@ const norm = (p: string) => p.replace(/\\/g, "/");
 // nodes constructed before an env change. Claude is the default.
 function providerForPath(filePath: string): SessionProvider {
   if (filePath.startsWith(OPENCODE_PATH_PREFIX)) return opencodeProvider;
+  if (filePath.startsWith(CURSOR_PATH_PREFIX)) return cursorProvider;
   const p = norm(filePath);
   if (
     p.startsWith(`${norm(getKiroSessionsDir())}/`) ||
@@ -228,6 +230,11 @@ export function parseSessionHistory(filePath: string): ActivityEntry[] {
   // resolves to a read-only DB query, bypassing the file-tail machinery.
   const opencodeId = sessionIdFromPath(filePath);
   if (opencodeId !== null) return parseOpenCodeSessionActivities(opencodeId);
+
+  // Cursor chats have no file — their synthetic `cursor:<projHash>/<chatId>`
+  // path resolves to a read-only store.db chain walk (mtime-cached).
+  const cursorId = cursorSessionIdFromPath(filePath);
+  if (cursorId !== null) return parseCursorSessionActivities(cursorId);
 
   if (!existsSync(filePath)) return [];
 

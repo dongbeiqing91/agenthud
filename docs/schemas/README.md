@@ -14,11 +14,15 @@ sessions to catch anything we missed.
 | Codex CLI    | [codex-session.md](./codex-session.md)          | `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` |
 | pi           | [pi-session.md](./pi-session.md)                | `~/.pi/agent/sessions/<sanitized-cwd>/<ISO>_<uuid>.jsonl` |
 | opencode     | [opencode-session.md](./opencode-session.md)    | `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db` (SQLite, not files) |
+| Cursor       | [cursor-session.md](./cursor-session.md)        | `~/.cursor/chats/<projectHash>/<chatId>/` (`meta.json` + `store.db` SQLite) |
 
 > Implemented as providers today: **Claude Code, Kiro CLI, Kiro IDE,
-> Codex CLI, opencode, pi.** opencode is SQLite-backed (a DB query, not
-> a file scan); pi session files are branched JSONL trees (see its doc
-> for the rollback/fork semantics).
+> Codex CLI, opencode, pi, Cursor.** opencode is SQLite-backed (a DB
+> query, not a file scan); pi session files are branched JSONL trees
+> (see its doc for the rollback/fork semantics); Cursor stores chats
+> as content-addressed blobs in per-chat SQLite files with a
+> protobuf-linked message chain (undocumented format — see its doc for
+> the decoded field map).
 
 ## How to keep these in sync
 

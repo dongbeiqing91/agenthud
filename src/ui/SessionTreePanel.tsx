@@ -284,7 +284,8 @@ function SessionRow({
   const providerTag = isParent && session.provider ? session.provider : "";
   // Provider tint: Claude gold, both Kiro surfaces magenta (the
   // label text `kiro` vs `kiro-ide` carries the distinction), Codex
-  // cyan, pi blue. The colored label is dim, so it reads as quiet metadata.
+  // cyan, pi blue, cursor red. The colored label is dim, so it reads as
+  // quiet metadata.
   const providerColor = session.provider?.startsWith("kiro")
     ? "magenta"
     : session.provider === "claude"
@@ -293,7 +294,9 @@ function SessionRow({
         ? "cyan"
         : session.provider === "pi"
           ? "blue"
-          : undefined;
+          : session.provider === "cursor"
+            ? "red"
+            : undefined;
 
   // Context-window usage gauge. Shown on BOTH top-level sessions and
   // sub-agents (they have independent contexts). Color encodes

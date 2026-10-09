@@ -34,6 +34,7 @@ import type {
 } from "../types/index.js";
 import { claudeProvider } from "./providers/claude.js";
 import { codexProvider } from "./providers/codex.js";
+import { cursorProvider } from "./providers/cursor.js";
 import { kiroProvider } from "./providers/kiro.js";
 import { kiroIdeProvider } from "./providers/kiro-ide.js";
 import { opencodeProvider } from "./providers/opencode.js";
@@ -54,6 +55,7 @@ const PROVIDERS: SessionProvider[] = [
   codexProvider,
   opencodeProvider,
   piProvider,
+  cursorProvider,
 ];
 
 /**

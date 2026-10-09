@@ -82,6 +82,7 @@ agenthud/
 | Sub-agents | `~/.claude/projects/{id}/subagents/` | Directory structure |
 | pi sessions | `~/.pi/agent/sessions/` | JSONL branched-tree scan (`providers/pi.ts`) |
 | pi context windows | `~/.pi/agent/models.json` | Model registry lookup |
+| Cursor sessions | `~/.cursor/chats/<projectHash>/<chatId>/` | `meta.json` + `store.db` SQLite blob-chain walk (`providers/cursor.ts`, Node 22+ `node:sqlite`) |
 | Config | `~/.agenthud/config.yaml` | YAML parse |
 | Logs | `~/.agenthud/logs/` | File write on `s` key |
 
