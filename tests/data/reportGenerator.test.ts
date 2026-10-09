@@ -11,12 +11,18 @@ vi.mock("node:fs", () => ({
 vi.mock("../../src/data/gitCommits.js", () => ({
   parseGitCommits: vi.fn().mockReturnValue([]),
 }));
+vi.mock("../../src/data/githubEvents.js", () => ({
+  fetchGitHubActivities: vi.fn().mockReturnValue([]),
+}));
 
 const { parseSessionHistory } = await import(
   "../../src/data/sessionHistory.js"
 );
 const { statSync } = await import("node:fs");
 const { parseGitCommits } = await import("../../src/data/gitCommits.js");
+const { fetchGitHubActivities } = await import(
+  "../../src/data/githubEvents.js"
+);
 const { generateReport } = await import("../../src/data/reportGenerator.js");
 
 const DAY = new Date(2026, 4, 14); // local midnight May 14
@@ -737,5 +743,123 @@ describe("generateReport", () => {
     });
     expect(result).toContain("line one\nlin");
     expect(result).not.toContain("line three");
+  });
+});
+
+describe("generateReport GitHub (non-agent) section", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(parseGitCommits).mockReturnValue([]);
+    vi.mocked(fetchGitHubActivities).mockReturnValue([]);
+  });
+
+  function makeGitHubActivity(
+    overrides: Partial<ActivityEntry> = {},
+  ): ActivityEntry {
+    return {
+      timestamp: new Date("2026-05-14T11:00:00Z"),
+      type: "github",
+      icon: "⎇",
+      label: "PR #21 merged",
+      detail: "cloud/cloud-cicd-mcp: some title",
+      ...overrides,
+    };
+  }
+
+  it("appends the GitHub section when withGit and events exist", () => {
+    vi.mocked(statSync).mockReturnValue({ mtimeMs: Date.now() });
+    vi.mocked(parseSessionHistory).mockReturnValue([makeActivity()]);
+    vi.mocked(fetchGitHubActivities).mockReturnValue([
+      makeGitHubActivity(),
+      makeGitHubActivity({
+        type: "commit",
+        icon: "◆",
+        label: "584fc80",
+        detail: "cloud/cloud-cicd-mcp (main): a commit",
+      }),
+    ]);
+    const result = generateReport([makeSession()], {
+      date: DAY,
+      include: ["bash"],
+      detailLimit: 120,
+      withGit: true,
+    });
+    expect(result).toContain("## GitHub (non-agent)");
+    expect(result).toContain(
+      "⎇ PR #21 merged: cloud/cloud-cicd-mcp: some title",
+    );
+    expect(result).toContain(
+      "◆ 584fc80: cloud/cloud-cicd-mcp (main): a commit",
+    );
+  });
+
+  it("omits the section when withGit and there are no events", () => {
+    vi.mocked(statSync).mockReturnValue({ mtimeMs: Date.now() });
+    vi.mocked(parseSessionHistory).mockReturnValue([makeActivity()]);
+    vi.mocked(fetchGitHubActivities).mockReturnValue([]);
+    const result = generateReport([makeSession()], {
+      date: DAY,
+      include: ["bash"],
+      withGit: true,
+    });
+    expect(result).not.toContain("GitHub (non-agent)");
+  });
+
+  it("does not fetch GitHub events when withGit is off", () => {
+    vi.mocked(statSync).mockReturnValue({ mtimeMs: Date.now() });
+    vi.mocked(parseSessionHistory).mockReturnValue([makeActivity()]);
+    generateReport([makeSession()], {
+      date: DAY,
+      include: ["bash"],
+      withGit: false,
+    });
+    expect(vi.mocked(fetchGitHubActivities)).not.toHaveBeenCalled();
+  });
+
+  it("shows the GitHub section even when no agent session has day activity", () => {
+    vi.mocked(statSync).mockReturnValue({ mtimeMs: Date.now() });
+    vi.mocked(parseSessionHistory).mockReturnValue([]);
+    vi.mocked(fetchGitHubActivities).mockReturnValue([makeGitHubActivity()]);
+    const result = generateReport([makeSession()], {
+      date: DAY,
+      include: ["bash"],
+      withGit: true,
+    });
+    expect(result).not.toContain("No activity found");
+    expect(result).toContain("## GitHub (non-agent)");
+    expect(result).toContain("⎇ PR #21 merged");
+  });
+
+  it("includes a github array in the JSON format", () => {
+    vi.mocked(statSync).mockReturnValue({ mtimeMs: Date.now() });
+    vi.mocked(parseSessionHistory).mockReturnValue([makeActivity()]);
+    vi.mocked(fetchGitHubActivities).mockReturnValue([makeGitHubActivity()]);
+    const result = generateReport([makeSession()], {
+      date: DAY,
+      include: ["bash"],
+      format: "json",
+      withGit: true,
+    });
+    const parsed = JSON.parse(result);
+    expect(Array.isArray(parsed.github)).toBe(true);
+    expect(parsed.github).toHaveLength(1);
+    expect(parsed.github[0].label).toBe("PR #21 merged");
+  });
+
+  it("applies detailLimit to GitHub rows", () => {
+    vi.mocked(statSync).mockReturnValue({ mtimeMs: Date.now() });
+    vi.mocked(parseSessionHistory).mockReturnValue([makeActivity()]);
+    vi.mocked(fetchGitHubActivities).mockReturnValue([
+      makeGitHubActivity({ detail: "a".repeat(200) }),
+    ]);
+    const result = generateReport([makeSession()], {
+      date: DAY,
+      include: ["bash"],
+      detailLimit: 50,
+      withGit: true,
+    });
+    const ghSection = result.split("## GitHub (non-agent)")[1];
+    expect(ghSection).toContain("a".repeat(50));
+    expect(ghSection).not.toContain("a".repeat(51));
   });
 });

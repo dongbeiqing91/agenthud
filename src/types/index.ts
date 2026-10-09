@@ -179,13 +179,14 @@ export const ICONS = {
   AskUserQuestion: "?",
   Skill: "✦",
   Commit: "◆",
+  GitHub: "⎇",
   Default: "$",
 } as const;
 
 // Activity entry (single item in a session's history)
 export interface ActivityEntry {
   timestamp: Date;
-  type: "tool" | "response" | "user" | "thinking" | "commit";
+  type: "tool" | "response" | "user" | "thinking" | "commit" | "github";
   icon: string;
   label: string;
   detail: string;

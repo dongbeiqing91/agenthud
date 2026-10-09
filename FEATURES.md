@@ -138,15 +138,28 @@ fix). The default set is shared with `summary` via
 - **Markdown:** one section per session with `[HH:MM] <icon>
   <label>: <detail>` rows. Times in local timezone. Task tool
   activities also unroll the subagent's returned text as a
-  `<task-result>…</task-result>` block (v0.13.0).
+  `<task-result>…</task-result>` block (v0.13.0). With `--with-git`,
+  a trailing `## GitHub (non-agent)` section lists manual (non-agent)
+  corp-GitHub activity for the day: my pushed commits, PR opened /
+  merged / closed, reviews, and issue comments (v0.20.0).
 - **JSON:** structured output with sub-agents nested under their
-  parent session.
+  parent session; `--with-git` adds a top-level `github` array.
 
 **Behavior:**
 - Reads `~/.claude/projects/<id>/*.jsonl` for each session on the
   target date.
 - With `--with-git`: invokes `git log --git-dir <project>/.git`
-  for each session's project path.
+  for each session's project path, and fetches the user's GitHub
+  corp events via `gh api /users/<me>/events` (host
+  `github-cli.corp.ebay.com`). The events cover manual work that no
+  agent session owns — pushes to forks, PRs, reviews, comments.
+  Push commits are filtered to the user's own author identity;
+  PR/review/comment rows are the user's by construction (their
+  event feed). Results are cached under
+  `~/.agenthud/cache/github-events/<login>/<date>.json` — past dates
+  permanently, today for 10 minutes. If `gh` is missing, not logged
+  in, or the API fails, a one-line warning goes to stderr and the
+  section is omitted; the report never fails because of it.
 
 **Defaults source:** `~/.agenthud/config.yaml → report.*`, then
 built-in defaults. CLI flags override per-run.

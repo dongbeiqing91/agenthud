@@ -50,7 +50,7 @@ agenthud summary -oI                      # open the summary + the summaries ind
 # 3 · The machine layer
 agenthud report                           # today's activity as markdown
 agenthud report --format json             # script-readable
-agenthud report --with-git                # merge git commits into the timeline
+agenthud report --with-git                # merge git commits + corp-GitHub activity
 ```
 
 ## The live HUD — `agenthud`
@@ -115,7 +115,7 @@ agenthud report --format json | jq '.sessions[].model'   # into a dashboard
 agenthud report --with-git    | your-own-llm-call        # into any pipeline
 ```
 
-`summary` is just `report` piped into an agent CLI. The digest isn't a black box — it's `report` + a prompt + whichever LLM you like, and you can swap any part. Markdown is the default; `--format json` (with provider + model per session) is the script-friendly form.
+`summary` is just `report` piped into an agent CLI. The digest isn't a black box — it's `report` + a prompt + whichever LLM you like, and you can swap any part. Markdown is the default; `--format json` (with provider + model per session) is the script-friendly form. With `--with-git`, `report` adds the session repos' `git log` commits *and* a `## GitHub (non-agent)` section from your corp-GitHub event feed (`gh api`, `github-cli.corp.ebay.com`) — manual pushes, PRs, reviews, and comments that no agent session owns (see [FEATURES.md](./FEATURES.md) for caching and degradation behavior).
 
 ## Configuration
 

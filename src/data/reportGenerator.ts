@@ -32,6 +32,7 @@ import { statSync } from "node:fs";
 import type { ActivityEntry, SessionNode } from "../types/index.js";
 import { activityMatchesInclude } from "./activityInclude.js";
 import { parseGitCommits } from "./gitCommits.js";
+import { fetchGitHubActivities } from "./githubEvents.js";
 import { parseSessionHistory } from "./sessionHistory.js";
 
 export interface ReportOptions {
@@ -135,6 +136,19 @@ export function generateReport(
   };
   const blocks: SessionBlock[] = [];
 
+  // GitHub (non-agent) activity — manual pushes/PRs/reviews/comments
+  // on the corp instance. Unlike the per-session git log it has no
+  // owning session, so it renders as its own trailing section. Same
+  // gate: withGit. Never breaks the report on failure.
+  let githubActivities: ActivityEntry[] = [];
+  if (withGit) {
+    try {
+      githubActivities = fetchGitHubActivities(date);
+    } catch {
+      githubActivities = [];
+    }
+  }
+
   // Git commits are per-PROJECT, not per-session — fetch them once
   // per projectPath and attach to the first qualifying session, or
   // every session of the same project would repeat the same commits.
@@ -165,9 +179,13 @@ export function generateReport(
     });
   }
 
-  if (blocks.length === 0) {
+  if (blocks.length === 0 && githubActivities.length === 0) {
     if (format === "json") {
-      return JSON.stringify({ date: dateStr, sessions: [] }, null, 2);
+      return JSON.stringify(
+        { date: dateStr, sessions: [], github: [] },
+        null,
+        2,
+      );
     }
     return `No activity found for ${dateStr}.`;
   }
@@ -214,6 +232,12 @@ export function generateReport(
         sessions: blocks.map(({ session, activities }) =>
           buildJsonSession(session, activities),
         ),
+        github: githubActivities.map((a) => ({
+          time: formatTime(a.timestamp),
+          icon: a.icon,
+          label: a.label,
+          detail: truncateRaw(a.detail, detailLimit),
+        })),
       },
       null,
       2,
@@ -241,6 +265,14 @@ export function generateReport(
       if (taskBody) lines.push(taskBody);
     }
     lines.push("");
+  }
+
+  if (githubActivities.length > 0) {
+    lines.push("## GitHub (non-agent)");
+    lines.push("");
+    for (const activity of githubActivities) {
+      lines.push(formatActivity(activity, detailLimit));
+    }
   }
 
   return lines.join("\n").trimEnd();
